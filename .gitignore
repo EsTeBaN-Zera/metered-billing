@@ -1,0 +1,14 @@
+.env
+bin/
+dist/
+*.exe
+*.test
+.DS_Store
+Thumbs.db
+web/node_modules/
+web/dist/
+.cursor/
+.idea/
+*.canvas.tsx
+
+
