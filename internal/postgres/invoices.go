@@ -50,6 +50,11 @@ func (s *Store) CustomersWithUsage(ctx context.Context, start, end time.Time) ([
 			    SELECT 1 FROM invoices i
 			    WHERE i.customer_id = w.customer_id AND i.period_start = $1
 			  )
+			  AND NOT EXISTS (
+			    SELECT 1 FROM dirty_hours d
+			    WHERE d.customer_id = w.customer_id
+			      AND d.hour_bucket >= $1 AND d.hour_bucket < $2
+			  )
 		`, start, end)
 		if err != nil {
 			return err

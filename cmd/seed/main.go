@@ -67,6 +67,14 @@ func main() {
 			fmt.Printf("  %s key%d  %s\n", s.name, i+1, k.plain)
 			evs := eventsFor(k.id, prevStart, prevEnd, s.busy)
 			evs = append(evs, eventsFor(k.id, thisStart, now, s.busy)...)
+			if s.busy {
+				evs = append(evs, models.Event{
+					RequestID: k.id + "-july-floor",
+					Endpoint:  "/v1/translate",
+					Timestamp: prevStart.Add(36 * time.Hour),
+					Units:     25000,
+				})
+			}
 			if s.spike {
 				evs = append(evs, spikeToday(k.id, now)...)
 			}
@@ -74,13 +82,16 @@ func main() {
 		}
 	}
 
-	for i := 0; i < 80; i++ {
+	for i := 0; i < 200; i++ {
 		n, err := hours.Run(ctx, 500)
 		if err != nil {
 			log.Fatal(err)
 		}
 		if n == 0 {
 			break
+		}
+		if i == 199 {
+			log.Fatal("dirty hours still left after seed")
 		}
 	}
 
