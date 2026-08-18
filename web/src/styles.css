@@ -1,0 +1,90 @@
+body {
+  font-family: Segoe UI, system-ui, sans-serif;
+  margin: 0;
+  background: #f4f4f1;
+  color: #1a1a1a;
+}
+header {
+  background: #1f3d2b;
+  color: #fff;
+  padding: 12px 20px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+header a {
+  color: #cde8d4;
+}
+main {
+  max-width: 960px;
+  margin: 20px auto;
+  padding: 0 16px;
+}
+.card {
+  background: #fff;
+  border: 1px solid #ddd;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+input, textarea, button, select {
+  font: inherit;
+  padding: 6px 8px;
+}
+button {
+  cursor: pointer;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 8px 0;
+}
+.error { color: #a40000; }
+.ok { color: #1f3d2b; }
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 140px;
+  border-bottom: 1px solid #ccc;
+}
+.bar {
+  flex: 1;
+  background: #3d7a55;
+  min-width: 2px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eee;
+}
+tbody tr.clickable {
+  cursor: pointer;
+}
+tbody tr.clickable:hover {
+  background: #f0f6f2;
+}
+tbody tr.clickable td:first-child {
+  color: #1f3d2b;
+  text-decoration: underline;
+}
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal .card { min-width: 320px; }
+.badge {
+  background: #c0392b;
+  color: #fff;
+  padding: 2px 8px;
+  font-size: 12px;
+}
