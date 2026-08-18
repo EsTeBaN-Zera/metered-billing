@@ -1,11 +1,11 @@
 body {
   font-family: Segoe UI, system-ui, sans-serif;
   margin: 0;
-  background: #f4f4f1;
+  background: #eef0f4;
   color: #1a1a1a;
 }
 header {
-  background: #1f3d2b;
+  background: #1b2838;
   color: #fff;
   padding: 12px 20px;
   display: flex;
@@ -13,7 +13,7 @@ header {
   align-items: center;
 }
 header a {
-  color: #cde8d4;
+  color: #a8c0d8;
 }
 main {
   max-width: 960px;
@@ -22,7 +22,7 @@ main {
 }
 .card {
   background: #fff;
-  border: 1px solid #ddd;
+  border: 1px solid #d5d8de;
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -41,7 +41,7 @@ button {
   margin: 8px 0;
 }
 .error { color: #a40000; }
-.ok { color: #1f3d2b; }
+.ok { color: #1b2838; }
 .bars {
   display: flex;
   align-items: flex-end;
@@ -51,7 +51,7 @@ button {
 }
 .bar {
   flex: 1;
-  background: #3d7a55;
+  background: #d45b2a;
   min-width: 2px;
 }
 table {
@@ -67,10 +67,10 @@ tbody tr.clickable {
   cursor: pointer;
 }
 tbody tr.clickable:hover {
-  background: #f0f6f2;
+  background: #eef2f7;
 }
 tbody tr.clickable td:first-child {
-  color: #1f3d2b;
+  color: #1b4f72;
   text-decoration: underline;
 }
 .modal {
@@ -83,7 +83,7 @@ tbody tr.clickable td:first-child {
 }
 .modal .card { min-width: 320px; }
 .badge {
-  background: #c0392b;
+  background: #a33b2b;
   color: #fff;
   padding: 2px 8px;
   font-size: 12px;

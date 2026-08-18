@@ -39,7 +39,7 @@ The brief says one window row per `customer x hour`. I store `customer x hour x 
 
 Events are append-only. Windows are rebuilt from events. An issued invoice is a snapshot. Paid invoices do not change.
 
-`job_locks` is in the schema and unused. The hour job uses `FOR UPDATE SKIP LOCKED` on dirty rows. The month job uses `UNIQUE (customer_id, period_start)`. If two workers both try to issue July for Acme, one insert wins and the other is a no-op. I would wire `job_locks` if I ran many invoice workers and wanted a friendlier "already running" log. The unique key is the real lock.
+`job_locks` is in the schema and unused. The hour job uses `FOR UPDATE SKIP LOCKED` on dirty rows. The month job uses `UNIQUE (customer_id, period_start)`. If two workers both try to issue July for Harborline, one insert wins and the other is a no-op. I would wire `job_locks` if I ran many invoice workers and wanted a friendlier "already running" log. The unique key is the real lock.
 
 ### Indexes (the queries we run)
 
@@ -91,7 +91,7 @@ Rule: do not SELECT then INSERT. Two requests can both see "missing". The unique
 
 **Hour job twice.** Recompute + upsert. Same totals.
 
-**Invoice job twice.** `UNIQUE (customer_id, period_start)` + `ON CONFLICT DO NOTHING`. One July invoice for Acme.
+**Invoice job twice.** `UNIQUE (customer_id, period_start)` + `ON CONFLICT DO NOTHING`. One July invoice for Harborline.
 
 **Webhook three times.** Insert `provider_event_id`. Conflict means we already saw it. Only the first successful insert may set `issued -> paid`. A second delivery returns 200 and does nothing.
 
@@ -127,7 +127,7 @@ This design scales with known fixes. It does not "not scale." The first fix is o
 
 ### Hostile customer
 
-Worst: read Globex invoices by guessing UUIDs, or replay a batch to inflate Globex / deflate themselves.
+Worst: read Cinder invoices by guessing UUIDs, or replay a batch to inflate Cinder / deflate themselves.
 
 Stops them:
 

@@ -54,10 +54,10 @@ func main() {
 		spike bool
 	}
 	specs := []spec{
-		{"seed:Acme", 2, true, false},
-		{"seed:Globex", 1, true, false},
-		{"seed:Initech", 1, false, false},
-		{"seed:Spike", 1, true, true},
+		{"seed:Harborline", 2, true, false},
+		{"seed:Cinder", 1, true, false},
+		{"seed:Quill", 1, false, false},
+		{"seed:Kestrel", 1, true, true},
 	}
 
 	fmt.Println("API keys (plaintext once):")

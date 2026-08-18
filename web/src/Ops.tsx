@@ -154,6 +154,10 @@ export default function OpsPage() {
             {loading ? "Loading..." : "Load customers"}
           </button>
         </div>
+        <label className="row">
+          <input type="checkbox" checked={showTests} onChange={(e) => setShowTests(e.target.checked)} />
+          Show test customers
+        </label>
         {err && <p className="error">{err}</p>}
         {ok && <p className="ok">{ok}</p>}
         {opening && <p>Opening...</p>}
@@ -234,10 +238,6 @@ export default function OpsPage() {
       )}
       <div className="card">
         <h3>Customers</h3>
-        <label className="row">
-          <input type="checkbox" checked={showTests} onChange={(e) => setShowTests(e.target.checked)} />
-          Show test customers
-        </label>
         <table>
           <tbody>
             {visible.length === 0 && (
@@ -251,7 +251,7 @@ export default function OpsPage() {
                 className="clickable"
                 onClick={() => openCustomer(c.id)}
                 style={{
-                  background: detail?.id === c.id ? "#e8f3ec" : undefined,
+                  background: detail?.id === c.id ? "#dce6f0" : undefined,
                 }}
               >
                 <td>{c.name}</td>
