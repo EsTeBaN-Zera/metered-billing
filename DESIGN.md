@@ -213,6 +213,12 @@ What would break first is **events on the same disk as invoices**, not the invoi
 
 Invoice count, credits, and audit stay small. They will not be the first bottleneck.
 
+## Simple is not the same as finished
+
+In my experience there is no “simple design” that never has to grow or get harder. The first mistake I have seen, year after year, is thinking a small setup will fully solve the problem and that we can worry about scale later.
+
+You have to be ready from day one if traffic jumps or the problem gets messier. That is why this design follows the **open/closed** idea: the billing rules stay closed (events, dirty hours, windows, invoices, unique keys), and ingest stays **open** to a new implementation if this one breaks under load. We would not rewrite how money is counted. We would change how events arrive — queue, then events off this database — as in the path below.
+
 ## If traffic grows
 
 This layout is meant to fail in a known order. We do not need a new billing model when QPS goes up. Windows, invoices, credits, and the unique keys stay. Only how events arrive would change.
