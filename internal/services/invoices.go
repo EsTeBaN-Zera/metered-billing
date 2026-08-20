@@ -2,15 +2,15 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 type InvoiceService struct {
-	Store InvoiceStore
-	Clock Clock
+	Store domain.InvoiceStore
+	Clock domain.Clock
 }
 
 func PreviousMonth(now time.Time) (start, end time.Time) {
@@ -30,7 +30,7 @@ func (s *InvoiceService) IssuePreviousMonth(ctx context.Context) (int, error) {
 
 func (s *InvoiceService) IssuePeriod(ctx context.Context, start, end time.Time) (int, error) {
 	if s.Store == nil {
-		return 0, fmt.Errorf("invoice store is missing")
+		return 0, domain.ErrInvoiceStoreMissing
 	}
 	ids, err := s.Store.CustomersWithUsage(ctx, start, end)
 	if err != nil {
@@ -85,10 +85,10 @@ func (s *InvoiceService) issueOne(ctx context.Context, customerID string, start,
 
 func (s *InvoiceService) List(ctx context.Context, customerID string, offset, limit int) ([]models.Invoice, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = domain.DefaultInvoicePage
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > domain.MaxInvoicePage {
+		limit = domain.MaxInvoicePage
 	}
 	if offset < 0 {
 		offset = 0

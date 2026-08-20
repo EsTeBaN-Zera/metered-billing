@@ -3,9 +3,9 @@ package controllers
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
@@ -17,16 +17,12 @@ type eventIn struct {
 }
 
 func (c *Controller) postEvents(w http.ResponseWriter, r *http.Request) {
-	key, ok := c.authCustomer(w, r)
-	if !ok {
-		return
-	}
+	key := apiKeyFrom(r)
 
 	var body struct {
 		Events []eventIn `json:"events"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 
@@ -34,7 +30,7 @@ func (c *Controller) postEvents(w http.ResponseWriter, r *http.Request) {
 	for _, e := range body.Events {
 		ts, err := time.Parse(time.RFC3339, e.Timestamp)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "timestamp must be RFC3339"})
+			writeErr(w, http.StatusBadRequest, domain.MsgTimestampRFC3339)
 			return
 		}
 		batch = append(batch, models.Event{
@@ -47,7 +43,7 @@ func (c *Controller) postEvents(w http.ResponseWriter, r *http.Request) {
 
 	out, err := c.Ingest.Ingest(r.Context(), key.CustomerID, key.ID, batch)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{
@@ -59,38 +55,19 @@ func (c *Controller) postEvents(w http.ResponseWriter, r *http.Request) {
 func (c *Controller) health(w http.ResponseWriter, r *http.Request) {
 	if c.DB != nil {
 		if err := c.DB.Ping(r.Context()); err != nil {
-			http.Error(w, "db down", http.StatusServiceUnavailable)
+			http.Error(w, domain.MsgDBDown, http.StatusServiceUnavailable)
 			return
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (c *Controller) authCustomer(w http.ResponseWriter, r *http.Request) (models.APIKey, bool) {
-	tok, ok := bearer(r.Header.Get("Authorization"))
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return models.APIKey{}, false
-	}
-	key, err := c.Auth.FromToken(r.Context(), tok)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return models.APIKey{}, false
-	}
-	return key, true
-}
-
-func bearer(header string) (string, bool) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
-		return "", false
-	}
-	tok := strings.TrimSpace(header[len(prefix):])
-	return tok, tok != ""
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", domain.JSONContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

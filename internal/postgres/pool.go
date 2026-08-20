@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"metered-billing/internal/domain"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,11 +16,11 @@ type Store struct {
 func Connect(ctx context.Context, databaseURL string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("db connect: %w", err)
+		return nil, fmt.Errorf("%s: %w", domain.MsgDBConnect, err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("db ping: %w", err)
+		return nil, fmt.Errorf("%s: %w", domain.MsgDBPing, err)
 	}
 	return &Store{Pool: pool}, nil
 }

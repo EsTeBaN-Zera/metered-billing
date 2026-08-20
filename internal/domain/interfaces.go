@@ -1,4 +1,4 @@
-package services
+package domain
 
 import (
 	"context"
@@ -48,4 +48,38 @@ type OpsStore interface {
 	OverrideLine(ctx context.Context, in models.LineOverride) error
 	ApplyPayment(ctx context.Context, ev models.PaymentEvent) (applied bool, err error)
 	GetInvoiceByID(ctx context.Context, invoiceID string) (models.Invoice, error)
+}
+
+type Ingester interface {
+	Ingest(ctx context.Context, customerID, apiKeyID string, batch []models.Event) (models.IngestResult, error)
+}
+
+type Authenticator interface {
+	FromToken(ctx context.Context, plaintext string) (models.APIKey, error)
+}
+
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
+type UsageLister interface {
+	List(ctx context.Context, customerID string, q models.UsageQuery) (models.UsagePage, error)
+}
+
+type InvoiceViewer interface {
+	List(ctx context.Context, customerID string, offset, limit int) ([]models.Invoice, error)
+	Get(ctx context.Context, customerID, invoiceID string) (models.Invoice, error)
+}
+
+type OpsAPI interface {
+	ListCustomers(ctx context.Context, offset, limit int) ([]models.Customer, error)
+	GetCustomer(ctx context.Context, id string) (models.CustomerDetail, error)
+	IssueCredit(ctx context.Context, in models.CreditIssue) (models.CreditGrant, bool, error)
+	OverrideLine(ctx context.Context, in models.LineOverride) error
+	ApplyPayment(ctx context.Context, ev models.PaymentEvent) (bool, error)
+	GetInvoice(ctx context.Context, invoiceID string) (models.Invoice, error)
+}
+
+type SignatureCheck interface {
+	Valid(body []byte, signatureHex string) bool
 }

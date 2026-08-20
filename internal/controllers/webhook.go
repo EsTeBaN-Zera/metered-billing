@@ -5,18 +5,19 @@ import (
 	"io"
 	"net/http"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 func (c *Controller) webhookPayment(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeErr(w, http.StatusBadRequest, domain.MsgInvalidBody)
 		return
 	}
 	sig := r.Header.Get("X-Webhook-Signature")
 	if c.WebhookCheck == nil || !c.WebhookCheck.Valid(body, sig) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeErr(w, http.StatusUnauthorized, domain.MsgUnauthorized)
 		return
 	}
 	var ev struct {
@@ -24,7 +25,7 @@ func (c *Controller) webhookPayment(w http.ResponseWriter, r *http.Request) {
 		InvoiceID string `json:"invoice_id"`
 	}
 	if err := json.Unmarshal(body, &ev); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeErr(w, http.StatusBadRequest, domain.MsgInvalidJSON)
 		return
 	}
 	_, err = c.Ops.ApplyPayment(r.Context(), models.PaymentEvent{
@@ -32,7 +33,7 @@ func (c *Controller) webhookPayment(w http.ResponseWriter, r *http.Request) {
 		InvoiceID:       ev.InvoiceID,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

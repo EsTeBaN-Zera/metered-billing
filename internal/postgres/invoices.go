@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 
 	"github.com/jackc/pgx/v5"
@@ -143,10 +144,10 @@ func (s *Store) SaveInvoice(ctx context.Context, inv models.NewInvoice) (bool, e
 			INSERT INTO invoices (
 				customer_id, period_start, period_end, status,
 				subtotal_micros, credit_applied_micros, total_micros
-			) VALUES ($1, $2, $3, 'issued', $4, $5, $6)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (customer_id, period_start) DO NOTHING
 			RETURNING id::text
-		`, inv.CustomerID, inv.PeriodStart, inv.PeriodEnd,
+		`, inv.CustomerID, inv.PeriodStart, inv.PeriodEnd, domain.StatusIssued,
 			inv.SubtotalMicros, inv.CreditMicros, inv.TotalMicros,
 		).Scan(&id)
 		if err == pgx.ErrNoRows {

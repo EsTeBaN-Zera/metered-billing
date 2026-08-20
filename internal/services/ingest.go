@@ -2,24 +2,24 @@ package services
 
 import (
 	"context"
-	"fmt"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 type IngestService struct {
-	Store EventStore
+	Store domain.EventStore
 }
 
 func (s *IngestService) Ingest(ctx context.Context, customerID, apiKeyID string, batch []models.Event) (models.IngestResult, error) {
 	if s.Store == nil {
-		return models.IngestResult{}, fmt.Errorf("event store is missing")
+		return models.IngestResult{}, domain.ErrEventStoreMissing
 	}
 	if len(batch) == 0 {
-		return models.IngestResult{}, fmt.Errorf("empty batch")
+		return models.IngestResult{}, domain.ErrEmptyBatch
 	}
-	if len(batch) > 500 {
-		return models.IngestResult{}, fmt.Errorf("batch too large")
+	if len(batch) > domain.MaxEventBatch {
+		return models.IngestResult{}, domain.ErrBatchTooLarge
 	}
 	for _, ev := range batch {
 		if err := checkEvent(ev); err != nil {
@@ -31,19 +31,19 @@ func (s *IngestService) Ingest(ctx context.Context, customerID, apiKeyID string,
 
 func checkEvent(ev models.Event) error {
 	if ev.RequestID == "" {
-		return fmt.Errorf("request_id is required")
+		return domain.ErrRequestIDRequired
 	}
-	if len(ev.RequestID) > 128 {
-		return fmt.Errorf("request_id too long")
+	if len(ev.RequestID) > domain.MaxRequestIDLen {
+		return domain.ErrRequestIDTooLong
 	}
 	if ev.Endpoint == "" {
-		return fmt.Errorf("endpoint is required")
+		return domain.ErrEndpointRequired
 	}
 	if ev.Units <= 0 {
-		return fmt.Errorf("units must be > 0")
+		return domain.ErrUnitsMustBePositive
 	}
 	if ev.Timestamp.IsZero() {
-		return fmt.Errorf("timestamp is required")
+		return domain.ErrTimestampRequired
 	}
 	return nil
 }

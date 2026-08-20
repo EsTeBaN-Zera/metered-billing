@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
@@ -22,7 +23,7 @@ func PriceUnits(units int64, tiers []models.Tier) []models.LineItem {
 			continue
 		}
 		lines = append(lines, models.LineItem{
-			Kind:         "tier",
+			Kind:         domain.LineKindTier,
 			Description:  tierLabel(t, qty),
 			Quantity:     qty,
 			UnitMicros:   t.PriceMicros,
@@ -59,8 +60,8 @@ func ApplyCredits(subtotal int64, grants []models.CreditGrant, nextPos int) (lin
 			continue
 		}
 		lines = append(lines, models.LineItem{
-			Kind:         "credit",
-			Description:  "Account credit",
+			Kind:         domain.LineKindCredit,
+			Description:  domain.CreditLineDesc,
 			Quantity:     0,
 			UnitMicros:   0,
 			AmountMicros: -take,
@@ -76,7 +77,7 @@ func ApplyCredits(subtotal int64, grants []models.CreditGrant, nextPos int) (lin
 
 func tierLabel(t models.Tier, qty int64) string {
 	if t.To == nil {
-		return fmt.Sprintf("%d units over %d", qty, t.From)
+		return fmt.Sprintf(domain.FmtTierOpen, qty, t.From)
 	}
-	return fmt.Sprintf("%d units (%d-%d)", qty, t.From, *t.To)
+	return fmt.Sprintf(domain.FmtTierClosed, qty, t.From, *t.To)
 }

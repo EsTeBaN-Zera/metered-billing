@@ -2,19 +2,20 @@ package services
 
 import (
 	"context"
-	"fmt"
+
+	"metered-billing/internal/domain"
 )
 
 type HourService struct {
-	Windows WindowStore
+	Windows domain.WindowStore
 }
 
 func (s *HourService) Run(ctx context.Context, limit int) (int, error) {
 	if s.Windows == nil {
-		return 0, fmt.Errorf("window store is missing")
+		return 0, domain.ErrWindowStoreMissing
 	}
 	if limit <= 0 {
-		limit = 100
+		limit = domain.DefaultHourJobLimit
 	}
 	return s.Windows.ProcessDirtyHours(ctx, limit)
 }

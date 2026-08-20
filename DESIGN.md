@@ -1,215 +1,244 @@
 # Design
 
-This is a billing core for an API product. Customers burn units. We store each call, roll them into hour windows, and once a month we issue an invoice.
+This is a metered billing core. Customers call an API, we count units, and once a month we issue an invoice.
 
-The brief target is 5,000 customers, 200 events/sec (2,000 peak), about 500 million events a month. Accuracy is contractual. I did not build Kafka or a pile of services for that. Postgres can hold this load if writes stay simple and invoices stay correct. The writeup below is where scale lives.
+The brief is about 5,000 customers, 200 events/sec (2,000 at peak). Invoices have to be correct. I did not add a message queue or extra services. One Postgres, two processes, and a small UI is enough at that size if writes stay simple. If traffic later outgrows this, the change path is written below — we would not throw away the billing schema.
 
-## Stack
+## How it is put together
 
-Go + Postgres + a small React UI, one repo, `docker compose up`.
+Go + Postgres + a React UI. One repo. After clone, follow **[README.md](README.md)** (`docker compose up --build`, then seed). The notes below are the design, not the runbook.
 
-The company uses Django. I used Go because I am faster in it on concurrent ingest, unique constraints, and tests that hit a real database. Postgres is the part they actually require. The UI is React + Vite + TypeScript, same as theirs.
+The company uses Django. I used Go because I am faster with concurrent ingest and tests that hit a real database. Postgres is the part the brief actually needs. The UI is React + TypeScript, like theirs.
 
-Two processes, same database:
+Two processes share the same database. They do not call each other:
 
-- `api` — HTTP (`/v1`, `/ops`, webhook)
-- `worker` — dirty hours, then last month's invoices
+- **api** — HTTP for customers (`/v1`), ops (`/ops`), and the payments webhook
+- **worker** — rebuilds dirty hours, then issues last month’s invoices
 
-They do not call each other. A seed command fakes product traffic.
+`cmd/seed` loads fake product traffic so the UI has something to show.
 
-I ingest events **in the request**, not through a queue. A 200 means the row is in Postgres. A queue would only delay the uniqueness check. At 200/sec a batched insert is enough.
+Ingest is **synchronous**. HTTP 200 means the event is in Postgres. A queue in front would only delay the uniqueness check (`request_id` still has to land in the database). At 200/sec a batched insert is enough. Queues become the next step if the API starts waiting on disk, not a day-one requirement.
 
-## Data model
+Shared rules live in `internal/domain`: plan id, page sizes, env names, error strings, and the store interfaces. HTTP auth that repeats across routes is middleware (`requireCustomer` on `/v1`, `requireOps` on `/ops`). Health and the webhook stay outside that, because they authenticate differently.
 
-Main tables:
+## Pipeline
 
-- `customers` — name + price plan
-- `api_keys` — hash + prefix, never plaintext
-- `usage_events` — one row per call, `request_id` is the primary key
-- `dirty_hours` — hours the worker must rebuild (`customer`, `api_key`, `hour`)
-- `usage_windows` — rolled-up units, same grain as dirty hours
-- `invoices` + `invoice_line_items`
-- `credit_grants` — leftover credit on the customer, used FIFO on the next invoice
-- `webhook_events` — `provider_event_id` primary key
-- `audit_entries` — insert only
+```
+POST /v1/events     →  usage_events + mark dirty_hours
+worker (often)      →  SUM events for that hour → upsert usage_windows
+worker (month)      →  SUM windows for last month → invoice + lines + credits
+webhook             →  invoice status = paid
+```
 
-Foreign keys follow the real objects: keys belong to a customer, events belong to a customer and a key, line items belong to an invoice. Money columns are `bigint` with `CHECK (>= 0)` where a negative amount would be wrong. Credits on a line item are allowed to be negative; invoice totals are not.
+The hour comes from `event_ts` (when the product call happened), not from when we received the HTTP batch. Late events still land in the right hour.
 
-The brief says one window row per `customer x hour`. I store `customer x hour x api_key`. Billing still sums the month for the customer. `GET /v1/usage?api_key=` can filter without a second table. At 5k customers, 2 keys, 24 x 30 hours that is about 7 million window rows a month, not 3.5 million. That is cheap. A later `customer x hour` rollup is optional if the chart query gets slow. I did not add it.
+The worker does **not** do `window.units += event`. It recomputes the hour from events, then upserts the window. If the job runs twice, the number is the same. Adding would double-bill on retry.
+
+`dirty_hours.gen` goes up on every new event for that hour. The worker deletes the dirty row only if `gen` still matches. A late event during the job bumps `gen`, the delete misses, and the hour stays dirty for the next run.
+
+The invoice job **waits** if any hour in that period is still dirty. That way we do not issue a $0 July because the worker had not caught up yet.
+
+Pricing uses the **month total**, not each hour. Current plan: first 10k units free, next 90k at $0.001, the rest at $0.0005. Line items are one row per tier that has quantity, then credit lines if any.
+
+## Database
+
+Yes, a diagram belongs here. Reviewers can see the FKs without opening SQL. Mermaid stays in this file, so it does not rot as a screenshot.
+
+```mermaid
+erDiagram
+    price_plans ||--o{ price_plan_tiers : "tiers"
+    price_plans ||--o{ customers : "plan"
+    customers ||--o{ api_keys : "keys"
+    customers ||--o{ usage_events : "events"
+    customers ||--o{ usage_windows : "windows"
+    customers ||--o{ dirty_hours : "dirty"
+    customers ||--o{ invoices : "invoices"
+    customers ||--o{ credit_grants : "credits"
+    api_keys ||--o{ usage_events : "used on"
+    api_keys ||--o{ usage_windows : "used on"
+    api_keys ||--o{ dirty_hours : "used on"
+    invoices ||--o{ invoice_line_items : "lines"
+    invoices ||--o{ webhook_events : "payments"
+
+    price_plans {
+        uuid id PK
+        text name
+    }
+    price_plan_tiers {
+        uuid id PK
+        uuid plan_id FK
+        bigint from_units
+        bigint to_units
+        bigint unit_price_micros
+    }
+    customers {
+        uuid id PK
+        text name
+        uuid price_plan_id FK
+    }
+    api_keys {
+        uuid id PK
+        uuid customer_id FK
+        text prefix
+        text key_hash
+    }
+    usage_events {
+        text request_id PK
+        uuid customer_id FK
+        uuid api_key_id FK
+        bigint units
+        timestamptz event_ts
+    }
+    dirty_hours {
+        uuid customer_id PK
+        uuid api_key_id PK
+        timestamptz hour_bucket PK
+        bigint gen
+    }
+    usage_windows {
+        uuid customer_id PK
+        uuid api_key_id PK
+        timestamptz hour_bucket PK
+        bigint units
+    }
+    invoices {
+        uuid id PK
+        uuid customer_id FK
+        timestamptz period_start
+        text status
+        bigint total_micros
+    }
+    invoice_line_items {
+        uuid id PK
+        uuid invoice_id FK
+        text kind
+        bigint amount_micros
+    }
+    credit_grants {
+        uuid id PK
+        uuid customer_id FK
+        bigint remaining_micros
+        text idempotency_key
+    }
+    webhook_events {
+        text provider_event_id PK
+        uuid invoice_id FK
+    }
+```
+
+`price_plans` is the catalog. `customers.price_plan_id` points at it. Tiers are not a string on the customer; they live in `price_plan_tiers`.
+
+Windows are `customer × hour × api_key`, not only `customer × hour`. Billing still sums the month for the customer. `GET /v1/usage?api_key=` can filter without a second table. That is more rows (~7M/month at brief size, not 3.5M). That is cheap. A later customer-hour rollup is optional if the chart gets slow.
 
 Events are append-only. Windows are rebuilt from events. An issued invoice is a snapshot. Paid invoices do not change.
 
-`job_locks` is in the schema and unused. The hour job uses `FOR UPDATE SKIP LOCKED` on dirty rows. The month job uses `UNIQUE (customer_id, period_start)`. If two workers both try to issue July for Harborline, one insert wins and the other is a no-op. I would wire `job_locks` if I ran many invoice workers and wanted a friendlier "already running" log. The unique key is the real lock.
+Events and windows also store `customer_id` even though it can be derived from the key. That is on purpose: RLS and the hour job can filter without a join. The two FKs do not force them to match; the app always writes both from the authenticated key.
 
-### Indexes (the queries we run)
+`audit_entries` is insert-only (trigger blocks UPDATE/DELETE). `entity_id` is not a foreign key. `job_locks` is in the schema and unused. The hour job uses `FOR UPDATE SKIP LOCKED`. The month job uses `UNIQUE (customer_id, period_start)`: if two workers issue July for the same customer, one insert wins.
 
-- events `(customer_id, api_key_id, event_ts)` — hour recompute is `SUM` over one key and one hour
+### Money
+
+Tiers are $0.001 and $0.0005. Cents cannot store that. Amounts are integer **microdollars**: $1 = 1,000,000. $0.001 per unit is 1000. Totals are `qty * unit` in integer math. The UI divides by 1e6 to show dollars.
+
+### Indexes we actually use
+
+- events `(customer_id, api_key_id, event_ts)` — recompute one hour
 - windows `(customer_id, hour_bucket)` — monthly sum and the usage chart
-- windows `(customer_id, api_key_id, hour_bucket)` — usage filtered by key + cursor
+- windows `(customer_id, api_key_id, hour_bucket)` — usage filtered by key
 - invoices `(customer_id, issued_at desc)` — list
 - `UNIQUE (customer_id, period_start)` — one invoice per month
 - `api_keys.key_hash` unique — lookup on every ingest
 - `credit_grants.idempotency_key` unique
 
-At 10x I would partition `usage_events` and `usage_windows` by month. At ~50-100x events I would move raw events off the billing primary (see scale).
-
-### Money
-
-Tiers are `$0.001` and `$0.0005`. Cents cannot store that. Amounts are integer microdollars: `$1 = 1_000_000`. `$0.001` per unit is `1000`. Totals are `qty * unit` in integer math. The UI divides by 1e6 to show dollars.
-
-## Pipeline
-
-```
-POST /v1/events  ->  usage_events + dirty_hours
-worker (often)   ->  SUM events for that hour -> upsert usage_windows
-worker (month)   ->  SUM windows for last month -> invoice + lines + apply credits
-webhook          ->  invoice status = paid
-```
-
-The hour comes from `event_ts` (when the product call happened), not from when we received the HTTP batch. Late and out-of-order events still land in the right hour.
-
-The worker does **not** do `window.units += event`. It recomputes:
-
-```
-SUM(units) FROM usage_events
-WHERE customer, key, event_ts in [hour, hour+1)
-```
-
-then upserts the window. If the job runs twice, the number is the same. If we had incremented, a retry would double-bill.
-
-`dirty_hours.gen` goes up on every new event for that hour. The worker deletes the dirty row only if `gen` still matches. A late event during the job bumps `gen`, the delete misses, and the hour stays dirty. Next run picks it up.
-
-If windows ever disagree with events, the fix is to mark those hours dirty and recompute. I do not "repair" an issued invoice from that (see late events).
-
-Pricing uses the **month total**, not each hour. Plan: 0-10k free, next 90k at `$0.001`, rest at `$0.0005`. Line items are one row per tier that has quantity, then credit lines.
+At ~10x load I would partition events and windows by month. After that, the path is a queue and then moving raw events off this database — see **If traffic grows**.
 
 ## Idempotency
 
-Rule: do not SELECT then INSERT. Two requests can both see "missing". The unique constraint is the lock. "Already there" is success.
+Do not SELECT then INSERT. Two requests can both see “missing”. The unique constraint is the lock. “Already there” is success.
 
-**Ingest replay.** `request_id` is the primary key. `ON CONFLICT DO NOTHING`. Same id twice, even at the same time, is one event. The response counts `inserted` vs `duplicates`. The customer id on the row is the authenticated key, not a body field, so a stolen id from another tenant cannot write into their ledger.
+| Path | Lock | Replay |
+| --- | --- | --- |
+| Ingest | `request_id` PK | `ON CONFLICT DO NOTHING`, response counts inserted vs duplicates |
+| Hour job | recompute + upsert | same totals |
+| Invoice job | `UNIQUE (customer_id, period_start)` | second run is a no-op |
+| Webhook | `provider_event_id` PK | only the first insert may set paid |
+| Ops credit | `Idempotency-Key` unique | same key returns the same grant |
+| Override | `FOR UPDATE` on the invoice | paid invoices are rejected |
 
-**Hour job twice.** Recompute + upsert. Same totals.
-
-**Invoice job twice.** `UNIQUE (customer_id, period_start)` + `ON CONFLICT DO NOTHING`. One July invoice for Harborline.
-
-**Webhook three times.** Insert `provider_event_id`. Conflict means we already saw it. Only the first successful insert may set `issued -> paid`. A second delivery returns 200 and does nothing.
-
-**Ops double-click credit.** `Idempotency-Key` is required. Unique on `credit_grants`. Same key returns the same grant. The UI sends a new UUID per confirm, so two different confirms are two credits on purpose. Two submits of the same confirm are one.
-
-**Override.** `SELECT ... FOR UPDATE` on the invoice. Paid invoices are rejected. Audit stores before/after JSON and a reason.
+Customer id on an event comes from the authenticated key, not from the body. A stolen `request_id` from another tenant cannot write into their ledger.
 
 ## Late events
 
-Two doors.
+**Door A (coded).** The month is not issued yet. We store the event, mark the hour dirty, rebuild the window. The invoice will include it.
 
-**Door A — month not issued yet (coded).** Event is stored. Dirty hour is marked. Window is rebuilt. The invoice job has not run, so the month total will include it.
+**Door B (not coded).** The invoice is already issued. We still store the event and refresh the window (the meter should be true). We do **not** rewrite the invoice the customer already saw. Extra units would be a later adjustment or an ops credit. The brief did not ask for a full reconciliation system.
 
-**Door B — invoice already issued (described, not coded).** We still store the event and refresh the window (the meter should be true). We do **not** rewrite the invoice the customer already saw. Extra units become an adjustment on a later period, or ops issues a credit / debit by policy. Accuracy is contractual; a PDF that changes after send is a fight.
+## Auth and tenants
 
-I did not build Door B. The brief said we do not need a full reconciliation system. The important part is: windows move, issued invoices do not.
+- Customer routes take a Bearer API key. Middleware hashes it (SHA-256 + `KEY_PEPPER`) and loads the key row. Plaintext is printed once by seed and never stored.
+- Ops routes take a shared `OPS_TOKEN`. That is a gap: it is not per-user SSO.
+- The webhook checks `X-Webhook-Signature` (HMAC of the raw body). Bad sig is 401.
+- `/v1` never trusts `customer_id` in the URL or body. The id is `SET LOCAL` in the same transaction. RLS on tenant tables: you only see your rows unless ops. Guessing another customer’s invoice id is **404**, not 403.
+- CORS is an allowlist. A browser from a random origin gets 403. curl with no Origin still works.
 
-## Failure modes at the brief's numbers
-
-500 million events/month is ~19 events/sec average, 200 sustained, 2,000 peak. Windows are ~7 million rows/month. Invoices are 5,000 rows/month.
-
-**1. `usage_events` on the same disk as invoices (breaks first).** Ingest is a lot of small writes. Invoice jobs, RLS, and backups share that primary. At ~10x (2,000/sec sustained) WAL and autovacuum on events hurt. Fix: partition events by month, then put ingest on a queue + writer pool still in Postgres. At ~50-100x, events leave the billing database; the worker reads from the event store and only writes windows + invoices to billing Postgres. Billing schema does not change.
-
-**2. Hour job lag, not invoice math.** 2,000/sec peak dirties many hours. If the worker falls behind, `/v1/usage` looks low until catch-up. Invoices wait until windows exist, so they stay correct but late. Fix: more workers (SKIP LOCKED already allows that), then partition dirty work by customer hash.
-
-**3. One fat customer.** One key at peak can serialize on that customer's hour rows. Fix: keep A1 grain (already per key), and cap batch size (already 500). I would add a per-key rate limit in the product, not in billing, if one customer can drown ingest.
-
-What will **not** break first: invoice row count, credit grants, audit. Those stay small.
-
-This design scales with known fixes. It does not "not scale." The first fix is operational (partition, more workers). The rewrite (events off the billing primary) is later, and it is not microservices of invoices.
-
-## Threat model
-
-### Hostile customer
-
-Worst: read Cinder invoices by guessing UUIDs, or replay a batch to inflate Cinder / deflate themselves.
-
-Stops them:
-
-- `/v1` never trusts `customer_id` in the URL or body. Bearer key -> hash -> `customer_id`.
-- That id is `SET LOCAL app.customer_id` in the same transaction.
-- RLS on events, windows, invoices, keys, credits: `customer_id = current_customer_id()` unless ops. A handler that forgets `WHERE customer_id = ...` still returns no row. Guessing an id is **404**, not 403, so we do not leak that the invoice exists.
-- Keys are SHA-256(plaintext + `KEY_PEPPER`). Pepper is env, not in the repo. Prefix is for display. Plaintext is printed once by seed and never stored.
-- CORS allowlist. A browser from a random origin gets 403. curl with no Origin still works (webhooks, scripts).
-
-They can still burn their own key and generate a big bill. That is their account.
-
-### Hostile ops user
-
-Worst: silent credit to a friend, edit a paid invoice, wipe the audit trail, dump all keys.
-
-Stops them:
-
-- Ops is a shared `OPS_TOKEN`, not per-user SSO. That is a gap (see what I did not build). The token is env-only and is not a customer key.
-- Credit needs a reason and an idempotency key. Override needs a reason. Paid invoices cannot be patched.
-- `audit_entries`: trigger rejects UPDATE/DELETE. App role has INSERT + SELECT only, no UPDATE/DELETE.
-- `lookup_api_key` is `SECURITY DEFINER` so ingest can hash-lookup without reading other tenants' key rows through RLS. The app never SELECTs plaintext because it does not exist.
-
-They can still issue a bad credit if they have the token. The audit row stays. That is the control we have without real identity.
-
-### Compromised webhook sender
-
-Worst: mark invoices paid without money, or replay an old paid event onto another invoice.
-
-Stops them:
-
-- `X-Webhook-Signature` HMAC-SHA256 of the raw body, secret from env. Bad sig is 401.
-- Replay of the same `event_id` hits `webhook_events` unique and does not pay twice.
-- The body names one `invoice_id`. We do not take "pay all." A stolen old payload cannot switch ids without a new valid signature.
-- We do not accept unsigned JSON, and we do not log the secret.
-
-If the secret leaks, they can pay any invoice. Rotate the secret. There is no per-customer webhook key in this version.
-
-## APIs and UI
+## API and UI
 
 Customer: `POST /v1/events`, `GET /v1/usage`, `GET /v1/invoices`, `GET /v1/invoices/{id}`.
 
-Usage is cursor pagination `(hour, api_key_id)`. Hour series can be large; offset would skip/duplicate under inserts. Invoices are offset. There are a few dozen a year per customer. I did not use a cursor there.
+Usage is cursor pagination `(hour, api_key_id)` because that series can be large. Invoices use offset; a customer has a few dozen a year.
 
-Ops: list/detail customers, credits, invoice get, line override, signed payments webhook.
+Ops: list/detail customers, credits, get invoice, override a line, payments webhook.
 
-Money-moving UI (credit, override) is a confirm modal plus a reason. Credit sends `Idempotency-Key`. Buttons disable while the request is in flight. Errors show in the page. Ops token and API keys are not in the repo; they live in env / the seed stdout.
+Credits and overrides in the UI need a confirm modal and a reason. Credit sends `Idempotency-Key`. Buttons disable while the request is in flight.
 
-## Trade-offs
+## Tests that cover the pipeline
 
-**1. Recompute dirty hours, not `+=`.**  
-Rejected incrementing the window on ingest. Faster on the write path, wrong on retry. The job already has to run. Recompute is the idempotent version of that job.
+Against a real Postgres:
 
-**2. Freeze issued invoices.**  
-Rejected "reopen March when a late event arrives." The window updates. The invoice the customer saw does not. Correction is next period or a credit. That matches "accuracy is contractual" better than a mutating PDF.
+- same `request_id` does not double, including two concurrent inserts
+- HTTP ingest replay returns inserted then duplicates
+- dirty hour is marked on ingest, job `SUM`s the hour, a second job is a no-op, a new event recomputes (not `+=`)
+- invoice is **not** issued while dirty hours remain; after drain, totals match the tiers
+- issuing the same month twice still leaves one invoice
+- credit with the same idempotency key once; override rejected when paid; webhook replay does not pay twice
+- another customer’s invoice is 404
 
-**3. Sync ingest to Postgres, queue later.**  
-Rejected HTTP 202 + Kafka on day one. Uniqueness still needs the database. At 200/sec the extra hop hides bugs and does not remove the unique key. The evolutionary path is in the failure-modes section.
+Not covered yet: `gen` bump while the hour job is running, credits on the **next** invoice end-to-end, two hour workers racing, Door B.
 
-**4. Go, not Django.**  
-Rejected copying the team's framework. I am slower in Django for this kind of concurrent write test. Cost: no `Manager` for tenant scope, so I put RLS in Postgres instead. That is the right layer anyway (cannot be forgotten in a view).
+## Scale at the brief’s numbers
 
-## What I did not build (and would next)
+500 million events/month is ~19/sec average, 200 sustained, 2,000 peak. Windows ~7 million rows/month. Invoices 5,000 rows/month.
 
-- Door B adjustments after issue
+What would break first is **events on the same disk as invoices**, not the invoice table. If the hour job lags, `/v1/usage` looks low until catch-up; invoices wait, so they stay correct but late. More workers already work because of `SKIP LOCKED`.
+
+Invoice count, credits, and audit stay small. They will not be the first bottleneck.
+
+## If traffic grows
+
+This layout is meant to fail in a known order. We do not need a new billing model when QPS goes up. Windows, invoices, credits, and the unique keys stay. Only how events arrive would change.
+
+**1. Today (brief size).** HTTP → Postgres in the same request. Worker rebuilds dirty hours from `usage_events`.
+
+**2. First pain (~10x, about 2,000/sec sustained).** WAL and autovacuum on `usage_events` slow down invoices and backups. **Change:** partition `usage_events` and `usage_windows` by month. Same tables, same API. Add hour workers if `dirty_hours` ages past a few minutes.
+
+**3. Next: the API is waiting on inserts.** Put a **queue** in front of a small writer pool that still writes to Postgres. Redis, SQS, or a table used as a queue is enough. Kafka is for later, when you need many consumers and long retention — it is a bigger operational jump than we need at the first bottleneck. Uniqueness does not move: the writer still does `ON CONFLICT DO NOTHING` on `request_id`. HTTP can return 202 once the message is queued; the customer-visible 200 “it is billed” stays when the row exists.
+
+**4. Much later (~50–100x).** Raw events leave the billing database (object store or a dedicated event store). The worker reads from there and only writes **windows + invoices + credits** to this Postgres. Billing tables and the invoice job do not change.
+
+What we are already ready for: `SKIP LOCKED` on dirty hours, idempotent ingest and invoices, invoice job that waits until hours are clean. What we would add only when metrics say so: partitions, then a queue, then moving events off the primary.
+
+## What I did not build
+
+- Door B adjustments after an invoice is issued
 - Real ops users / RBAC (today: one token)
 - Prepaid / kill-switch (this product is postpaid monthly)
-- Key rotation UI (seed prints plaintext once)
+- Key rotation UI
 - Using `job_locks`
-- A metrics product. Alerts below are the hooks I would add, not a Grafana stack in this repo
+- A queue in front of ingest (see the path above)
 - Moving events off Postgres (only when numbers say so)
 
-Next if this shipped: Door B as a next-period line item, ops login, partition `usage_events` by month.
+If this shipped next: Door B as a next-period line, ops login, partition `usage_events` by month.
 
-## Alerts and debugging a wrong invoice
+## Debugging a wrong invoice
 
-I would alert on:
-
-- ingest 5xx or latency p99 (events not landing)
-- `dirty_hours` age > 15 minutes (usage UI lying)
-- invoice job failed / issued count = 0 on the first of the month
-- webhook 401 spike (bad secret or attacker)
-- `audit_entries` insert errors
-- one customer ingest share > 30% of QPS (noisy neighbor)
-
-To debug a wrong invoice: open the invoice id in ops, read line items, `SUM(usage_windows)` for that `customer_id` and `[period_start, period_end)`, compare to the tier math. If the window is wrong, `SUM(usage_events)` for those hours. If events look right and windows do not, mark the hours dirty and recompute. If the invoice disagrees with windows and it is already issued, do not UPDATE the invoice; credit or next-period adjust, and look at audit for an override.
+Ops: open the invoice, read line items, `SUM(usage_windows)` for that customer and period, compare to the tier math. If the window is wrong, `SUM(usage_events)` for those hours. If events look right and windows do not, mark the hours dirty and recompute. If the invoice already issued disagrees with windows, do not UPDATE it; credit or adjust next period, and read audit for an override.

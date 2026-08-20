@@ -7,19 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 	"metered-billing/internal/postgres"
 	"metered-billing/internal/services"
 )
 
 func TestGetInvoice_otherCustomer404(t *testing.T) {
-	store, err := postgres.Connect(context.Background(), "postgres://app:app@localhost:5432/billing?sslmode=disable")
+	store, err := postgres.Connect(context.Background(), domain.TestDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
 	ctx := context.Background()
-	pepper := services.PepperHash{Pepper: "dev-key-pepper-change-me"}
+	pepper := services.PepperHash{Pepper: domain.TestKeyPepper}
 
 	ownerPlain, ownerPrefix, _ := services.NewPlaintext()
 	otherPlain, otherPrefix, _ := services.NewPlaintext()
@@ -62,13 +63,13 @@ func TestGetInvoice_otherCustomer404(t *testing.T) {
 }
 
 func TestGetUsage_returnsWindow(t *testing.T) {
-	store, err := postgres.Connect(context.Background(), "postgres://app:app@localhost:5432/billing?sslmode=disable")
+	store, err := postgres.Connect(context.Background(), domain.TestDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
 	ctx := context.Background()
-	pepper := services.PepperHash{Pepper: "dev-key-pepper-change-me"}
+	pepper := services.PepperHash{Pepper: domain.TestKeyPepper}
 	plain, prefix, _ := services.NewPlaintext()
 	cid, kid := insertCustomerKey(t, store, "use-"+prefix, prefix, pepper.Sum(plain))
 
@@ -116,9 +117,9 @@ func insertCustomerKey(t *testing.T, store *postgres.Store, name, prefix, hash s
 	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO customers (name, price_plan_id)
-		VALUES ($1, '11111111-1111-1111-1111-111111111111')
+		VALUES ($1, $2)
 		RETURNING id::text
-	`, name).Scan(&customerID); err != nil {
+	`, name, domain.StandardPlanID).Scan(&customerID); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.QueryRow(ctx, `

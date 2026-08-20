@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
-	"metered-billing/internal/services"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -59,18 +59,18 @@ func (s *Store) GetCustomer(ctx context.Context, id string) (models.CustomerDeta
 			  SELECT SUM(units) AS day_units
 			  FROM usage_windows
 			  WHERE customer_id = $1
-			    AND hour_bucket >= now() - interval '30 days'
+			    AND hour_bucket >= now() - make_interval(days => $2)
 			  GROUP BY date_trunc('day', hour_bucket)
 			) t
-		`, id).Scan(&d.Avg30Units)
-		d.Anomaly = d.Avg30Units > 0 && float64(d.TodayUnits) > 10*d.Avg30Units
+		`, id, domain.AvgWindowDays).Scan(&d.Avg30Units)
+		d.Anomaly = d.Avg30Units > 0 && float64(d.TodayUnits) > float64(domain.AnomalyFactor)*d.Avg30Units
 
 		rows, err := tx.Query(ctx, `
 			SELECT id::text, customer_id::text, period_start, period_end, status,
 			       subtotal_micros, credit_applied_micros, total_micros, issued_at, paid_at
 			FROM invoices WHERE customer_id = $1
-			ORDER BY issued_at DESC LIMIT 20
-		`, id)
+			ORDER BY issued_at DESC LIMIT $2
+		`, id, domain.OpsInvoiceListLimit)
 		if err != nil {
 			return err
 		}
@@ -139,8 +139,8 @@ func (s *Store) OverrideLine(ctx context.Context, in models.LineOverride) error 
 		if err != nil {
 			return err
 		}
-		if status == "paid" {
-			return services.ErrInvoicePaid
+		if status == domain.StatusPaid {
+			return domain.ErrInvoicePaid
 		}
 
 		if _, err := tx.Exec(ctx, `
@@ -193,9 +193,9 @@ func (s *Store) ApplyPayment(ctx context.Context, ev models.PaymentEvent) (bool,
 			return err
 		}
 		tag, err := tx.Exec(ctx, `
-			UPDATE invoices SET status = 'paid', paid_at = now()
-			WHERE id = $1 AND status = 'issued'
-		`, ev.InvoiceID)
+			UPDATE invoices SET status = $2, paid_at = now()
+			WHERE id = $1 AND status = $3
+		`, ev.InvoiceID, domain.StatusPaid, domain.StatusIssued)
 		if err != nil {
 			return err
 		}

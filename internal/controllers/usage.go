@@ -5,19 +5,17 @@ import (
 	"strconv"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 func (c *Controller) getUsage(w http.ResponseWriter, r *http.Request) {
-	key, ok := c.authCustomer(w, r)
-	if !ok {
-		return
-	}
+	key := apiKeyFrom(r)
 	q := r.URL.Query()
 	from, err1 := time.Parse(time.RFC3339, q.Get("from"))
 	to, err2 := time.Parse(time.RFC3339, q.Get("to"))
 	if err1 != nil || err2 != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from and to must be RFC3339"})
+		writeErr(w, http.StatusBadRequest, domain.MsgFromToRFC3339)
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -29,7 +27,7 @@ func (c *Controller) getUsage(w http.ResponseWriter, r *http.Request) {
 		Limit:    limit,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

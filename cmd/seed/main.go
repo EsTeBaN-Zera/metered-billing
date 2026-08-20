@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 	"metered-billing/internal/postgres"
 	"metered-billing/internal/services"
@@ -14,17 +15,15 @@ import (
 	"math/rand/v2"
 )
 
-const planID = "11111111-1111-1111-1111-111111111111"
-
 func main() {
 	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+	databaseURL := os.Getenv(domain.EnvDatabaseURL)
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		log.Fatal(domain.MsgDatabaseURLRequired)
 	}
-	pepper := os.Getenv("KEY_PEPPER")
+	pepper := os.Getenv(domain.EnvKeyPepper)
 	if pepper == "" {
-		log.Fatal("KEY_PEPPER is required")
+		log.Fatal(domain.MsgKeyPepperRequired)
 	}
 
 	store, err := postgres.Connect(ctx, databaseURL)
@@ -34,7 +33,7 @@ func main() {
 	defer store.Close()
 
 	if seeded(ctx, store) {
-		log.Print("seed already ran, skip")
+		log.Print(domain.MsgSeedAlreadyRan)
 		return
 	}
 
@@ -47,51 +46,38 @@ func main() {
 	prevStart, prevEnd := services.PreviousMonth(now)
 	thisStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
-	type spec struct {
-		name  string
-		nKeys int
-		busy  bool
-		spike bool
-	}
-	specs := []spec{
-		{"seed:Harborline", 2, true, false},
-		{"seed:Cinder", 1, true, false},
-		{"seed:Quill", 1, false, false},
-		{"seed:Kestrel", 1, true, true},
-	}
-
-	fmt.Println("API keys (plaintext once):")
-	for _, s := range specs {
-		cid, keys := createFirm(ctx, store, hash, s.name, s.nKeys)
+	fmt.Println(domain.MsgSeedAPIKeys)
+	for _, s := range domain.SeedFirms {
+		cid, keys := createFirm(ctx, store, hash, s.Name, s.Keys)
 		for i, k := range keys {
-			fmt.Printf("  %s key%d  %s\n", s.name, i+1, k.plain)
-			evs := eventsFor(k.id, prevStart, prevEnd, s.busy)
-			evs = append(evs, eventsFor(k.id, thisStart, now, s.busy)...)
-			if s.busy {
+			fmt.Printf(domain.MsgSeedKeyLine, s.Name, i+1, k.plain)
+			evs := eventsFor(k.id, prevStart, prevEnd, s.Busy)
+			evs = append(evs, eventsFor(k.id, thisStart, now, s.Busy)...)
+			if s.Busy {
 				evs = append(evs, models.Event{
 					RequestID: k.id + "-july-floor",
-					Endpoint:  "/v1/translate",
+					Endpoint:  domain.SeedEndpoints[0],
 					Timestamp: prevStart.Add(36 * time.Hour),
-					Units:     25000,
+					Units:     domain.SeedJulyFloorUnits,
 				})
 			}
-			if s.spike {
+			if s.Spike {
 				evs = append(evs, spikeToday(k.id, now)...)
 			}
 			flush(ctx, ingest, cid, k.id, evs)
 		}
 	}
 
-	for i := 0; i < 200; i++ {
-		n, err := hours.Run(ctx, 500)
+	for i := 0; i < domain.SeedHourPasses; i++ {
+		n, err := hours.Run(ctx, domain.SeedHourBatch)
 		if err != nil {
 			log.Fatal(err)
 		}
 		if n == 0 {
 			break
 		}
-		if i == 199 {
-			log.Fatal("dirty hours still left after seed")
+		if i == domain.SeedHourPasses-1 {
+			log.Fatal(domain.MsgDirtyHoursLeft)
 		}
 	}
 
@@ -99,7 +85,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("seed done, invoices issued for previous month: %d", issued)
+	log.Printf(domain.MsgSeedDone, issued)
 }
 
 type apiKey struct {
@@ -117,7 +103,7 @@ func seeded(ctx context.Context, store *postgres.Store) bool {
 		log.Fatal(err)
 	}
 	var n int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM customers WHERE name LIKE 'seed:%'`).Scan(&n); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM customers WHERE name LIKE $1`, domain.SeedNamePrefix).Scan(&n); err != nil {
 		log.Fatal(err)
 	}
 	return n > 0
@@ -135,7 +121,7 @@ func createFirm(ctx context.Context, store *postgres.Store, hash services.Pepper
 	var cid string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO customers (name, price_plan_id) VALUES ($1, $2) RETURNING id::text
-	`, name, planID).Scan(&cid); err != nil {
+	`, name, domain.StandardPlanID).Scan(&cid); err != nil {
 		log.Fatal(err)
 	}
 	keys := make([]apiKey, 0, nKeys)
@@ -148,7 +134,7 @@ func createFirm(ctx context.Context, store *postgres.Store, hash services.Pepper
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO api_keys (customer_id, name, prefix, key_hash)
 			VALUES ($1, $2, $3, $4) RETURNING id::text
-		`, cid, fmt.Sprintf("key-%d", i+1), prefix, hash.Sum(plain)).Scan(&kid); err != nil {
+		`, cid, fmt.Sprintf(domain.FmtSeedKeyName, i+1), prefix, hash.Sum(plain)).Scan(&kid); err != nil {
 			log.Fatal(err)
 		}
 		keys = append(keys, apiKey{id: kid, plain: plain})
@@ -193,22 +179,21 @@ func spikeToday(keyID string, now time.Time) []models.Event {
 		}
 		out = append(out, models.Event{
 			RequestID: fmt.Sprintf("%s-spike-%d", keyID, i),
-			Endpoint:  "/v1/translate",
+			Endpoint:  domain.SeedEndpoints[0],
 			Timestamp: ts.Add(10 * time.Minute),
-			Units:     8000,
+			Units:     domain.SeedSpikeUnits,
 		})
 	}
 	return out
 }
 
 func pickEndpoint() string {
-	eps := []string{"/v1/translate", "/v1/search", "/v1/embed"}
-	return eps[rand.IntN(len(eps))]
+	return domain.SeedEndpoints[rand.IntN(len(domain.SeedEndpoints))]
 }
 
 func flush(ctx context.Context, ingest *services.IngestService, customerID, keyID string, evs []models.Event) {
-	for i := 0; i < len(evs); i += 200 {
-		end := min(i+200, len(evs))
+	for i := 0; i < len(evs); i += domain.SeedFlushChunk {
+		end := min(i+domain.SeedFlushChunk, len(evs))
 		if _, err := ingest.Ingest(ctx, customerID, keyID, evs[i:end]); err != nil {
 			log.Fatal(err)
 		}

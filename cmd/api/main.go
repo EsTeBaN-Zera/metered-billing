@@ -7,9 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"time"
 
 	"metered-billing/internal/controllers"
+	"metered-billing/internal/domain"
 	"metered-billing/internal/postgres"
 	"metered-billing/internal/services"
 )
@@ -18,33 +18,33 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	databaseURL := os.Getenv("DATABASE_URL")
+	databaseURL := os.Getenv(domain.EnvDatabaseURL)
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		log.Fatal(domain.MsgDatabaseURLRequired)
 	}
-	addr := os.Getenv("HTTP_ADDR")
+	addr := os.Getenv(domain.EnvHTTPAddr)
 	if addr == "" {
-		addr = ":8080"
+		addr = domain.DefaultHTTPAddr
 	}
-	pepper := os.Getenv("KEY_PEPPER")
+	pepper := os.Getenv(domain.EnvKeyPepper)
 	if pepper == "" {
-		log.Fatal("KEY_PEPPER is required")
+		log.Fatal(domain.MsgKeyPepperRequired)
 	}
-	apiVersion := os.Getenv("API_VERSION")
+	apiVersion := os.Getenv(domain.EnvAPIVersion)
 	if apiVersion == "" {
-		apiVersion = "v1"
+		apiVersion = domain.DefaultAPIVersion
 	}
-	opsToken := os.Getenv("OPS_TOKEN")
+	opsToken := os.Getenv(domain.EnvOpsToken)
 	if opsToken == "" {
-		log.Fatal("OPS_TOKEN is required")
+		log.Fatal(domain.MsgOpsTokenRequired)
 	}
-	webhookSecret := os.Getenv("WEBHOOK_SECRET")
+	webhookSecret := os.Getenv(domain.EnvWebhookSecret)
 	if webhookSecret == "" {
-		log.Fatal("WEBHOOK_SECRET is required")
+		log.Fatal(domain.MsgWebhookSecretRequired)
 	}
-	origins := os.Getenv("CORS_ORIGINS")
+	origins := os.Getenv(domain.EnvCORSOrigins)
 	if origins == "" {
-		origins = "http://localhost:5173"
+		origins = domain.DefaultCORSOrigin
 	}
 
 	store, err := postgres.Connect(ctx, databaseURL)
@@ -69,18 +69,18 @@ func main() {
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           controllers.CORS(strings.Split(origins, ","), ctrl.Handler()),
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: domain.ReadHeaderTimeout,
 	}
 
 	go func() {
-		log.Printf("api listening on %s (%s)", addr, apiVersion)
+		log.Printf(domain.MsgAPIListening, addr, apiVersion)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()
 
 	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), domain.ShutdownTimeout)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
 }

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/postgres"
 	"metered-billing/internal/services"
 )
@@ -15,9 +16,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	databaseURL := os.Getenv("DATABASE_URL")
+	databaseURL := os.Getenv(domain.EnvDatabaseURL)
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		log.Fatal(domain.MsgDatabaseURLRequired)
 	}
 
 	store, err := postgres.Connect(ctx, databaseURL)
@@ -29,33 +30,33 @@ func main() {
 	hours := &services.HourService{Windows: store}
 	invoices := &services.InvoiceService{Store: store, Clock: services.RealClock{}}
 	run := func() {
-		n, err := hours.Run(ctx, 100)
+		n, err := hours.Run(ctx, domain.DefaultHourJobLimit)
 		if err != nil {
-			log.Printf("hour job: %v", err)
+			log.Printf(domain.MsgHourJobErr, err)
 			return
 		}
 		if n > 0 {
-			log.Printf("hour job processed %d dirty hours", n)
+			log.Printf(domain.MsgHourJobProcessed, n)
 		}
 		issued, err := invoices.IssuePreviousMonth(ctx)
 		if err != nil {
-			log.Printf("invoice job: %v", err)
+			log.Printf(domain.MsgInvoiceJobErr, err)
 			return
 		}
 		if issued > 0 {
-			log.Printf("invoice job issued %d", issued)
+			log.Printf(domain.MsgInvoiceJobIssued, issued)
 		}
 	}
 
-	log.Print("worker up")
+	log.Print(domain.MsgWorkerUp)
 	run()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(domain.WorkerTick)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Print("worker stopping")
+			log.Print(domain.MsgWorkerStopping)
 			return
 		case <-ticker.C:
 			run()

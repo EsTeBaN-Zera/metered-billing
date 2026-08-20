@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 	"metered-billing/internal/services"
 )
@@ -66,7 +67,7 @@ func TestOverride_rejectedWhenPaid(t *testing.T) {
 	err = ops.OverrideLine(ctx, models.LineOverride{
 		InvoiceID: invID, LineID: lineID, AmountMicros: 1, Reason: "nope", Actor: "ops",
 	})
-	if err != services.ErrInvoicePaid {
+	if err != domain.ErrInvoicePaid {
 		t.Fatalf("got %v", err)
 	}
 }

@@ -3,32 +3,32 @@ package services
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"strings"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 type UsageService struct {
-	Store UsageStore
+	Store domain.UsageStore
 }
 
 func (s *UsageService) List(ctx context.Context, customerID string, q models.UsageQuery) (models.UsagePage, error) {
 	if s.Store == nil {
-		return models.UsagePage{}, fmt.Errorf("usage store is missing")
+		return models.UsagePage{}, domain.ErrUsageStoreMissing
 	}
 	if q.To.IsZero() || q.From.IsZero() {
-		return models.UsagePage{}, fmt.Errorf("from and to are required")
+		return models.UsagePage{}, domain.ErrFromAndToRequired
 	}
 	if !q.To.After(q.From) {
-		return models.UsagePage{}, fmt.Errorf("to must be after from")
+		return models.UsagePage{}, domain.ErrToAfterFrom
 	}
 	if q.Limit <= 0 {
-		q.Limit = 50
+		q.Limit = domain.DefaultPageSize
 	}
-	if q.Limit > 200 {
-		q.Limit = 200
+	if q.Limit > domain.MaxUsagePage {
+		q.Limit = domain.MaxUsagePage
 	}
 	if q.Cursor != "" {
 		hour, key, err := DecodeCursor(q.Cursor)
@@ -60,15 +60,15 @@ func EncodeCursor(hour time.Time, apiKeyID string) string {
 func DecodeCursor(s string) (time.Time, string, error) {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return time.Time{}, "", fmt.Errorf("bad cursor")
+		return time.Time{}, "", domain.ErrBadCursor
 	}
 	hourStr, key, ok := strings.Cut(string(b), "|")
 	if !ok {
-		return time.Time{}, "", fmt.Errorf("bad cursor")
+		return time.Time{}, "", domain.ErrBadCursor
 	}
 	hour, err := time.Parse(time.RFC3339, hourStr)
 	if err != nil {
-		return time.Time{}, "", fmt.Errorf("bad cursor")
+		return time.Time{}, "", domain.ErrBadCursor
 	}
 	return hour, key, nil
 }

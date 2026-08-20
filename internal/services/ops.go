@@ -5,21 +5,21 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 )
 
 type OpsService struct {
-	Store OpsStore
+	Store domain.OpsStore
 }
 
 func (s *OpsService) ListCustomers(ctx context.Context, offset, limit int) ([]models.Customer, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = domain.DefaultPageSize
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > domain.MaxOpsPage {
+		limit = domain.MaxOpsPage
 	}
 	return s.Store.ListCustomers(ctx, offset, limit)
 }
@@ -30,30 +30,30 @@ func (s *OpsService) GetCustomer(ctx context.Context, id string) (models.Custome
 
 func (s *OpsService) IssueCredit(ctx context.Context, in models.CreditIssue) (models.CreditGrant, bool, error) {
 	if in.AmountMicros <= 0 {
-		return models.CreditGrant{}, false, fmt.Errorf("amount must be > 0")
+		return models.CreditGrant{}, false, domain.ErrAmountMustBePositive
 	}
 	if in.Reason == "" || in.IdempotencyKey == "" {
-		return models.CreditGrant{}, false, fmt.Errorf("reason and Idempotency-Key are required")
+		return models.CreditGrant{}, false, domain.ErrReasonAndIdempotency
 	}
 	if in.Actor == "" {
-		in.Actor = "ops"
+		in.Actor = domain.ActorOps
 	}
 	return s.Store.IssueCredit(ctx, in)
 }
 
 func (s *OpsService) OverrideLine(ctx context.Context, in models.LineOverride) error {
 	if in.Reason == "" {
-		return fmt.Errorf("reason is required")
+		return domain.ErrReasonRequired
 	}
 	if in.Actor == "" {
-		in.Actor = "ops"
+		in.Actor = domain.ActorOps
 	}
 	return s.Store.OverrideLine(ctx, in)
 }
 
 func (s *OpsService) ApplyPayment(ctx context.Context, ev models.PaymentEvent) (bool, error) {
 	if ev.ProviderEventID == "" || ev.InvoiceID == "" {
-		return false, fmt.Errorf("event_id and invoice_id are required")
+		return false, domain.ErrEventAndInvoiceID
 	}
 	return s.Store.ApplyPayment(ctx, ev)
 }

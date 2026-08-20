@@ -17,11 +17,11 @@ type UsageWindow struct {
 }
 
 type UsageQuery struct {
-	From     time.Time
-	To       time.Time
-	APIKeyID string // optional
-	Cursor   string
-	Limit    int
+	From      time.Time
+	To        time.Time
+	APIKeyID  string // optional
+	Cursor    string
+	Limit     int
 	AfterHour time.Time
 	AfterKey  string
 }

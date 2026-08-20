@@ -6,21 +6,19 @@ import (
 	"strconv"
 	"time"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/models"
 
 	"github.com/jackc/pgx/v5"
 )
 
 func (c *Controller) listInvoices(w http.ResponseWriter, r *http.Request) {
-	key, ok := c.authCustomer(w, r)
-	if !ok {
-		return
-	}
+	key := apiKeyFrom(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	list, err := c.Invoices.List(r.Context(), key.CustomerID, offset, limit)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	items := make([]map[string]any, 0, len(list))
@@ -31,17 +29,14 @@ func (c *Controller) listInvoices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) getInvoice(w http.ResponseWriter, r *http.Request) {
-	key, ok := c.authCustomer(w, r)
-	if !ok {
-		return
-	}
+	key := apiKeyFrom(r)
 	inv, err := c.Invoices.Get(r.Context(), key.CustomerID, r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			writeErr(w, http.StatusNotFound, domain.MsgNotFound)
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, invoiceJSON(inv, true))

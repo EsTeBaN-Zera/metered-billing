@@ -8,18 +8,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"metered-billing/internal/domain"
 	"metered-billing/internal/postgres"
 	"metered-billing/internal/services"
 )
 
 func TestPostEvents_replayIsOk(t *testing.T) {
-	store, err := postgres.Connect(context.Background(), "postgres://app:app@localhost:5432/billing?sslmode=disable")
+	store, err := postgres.Connect(context.Background(), domain.TestDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
 
-	pepper := services.PepperHash{Pepper: "dev-key-pepper-change-me"}
+	pepper := services.PepperHash{Pepper: domain.TestKeyPepper}
 	plaintext, prefix, err := services.NewPlaintext()
 	if err != nil {
 		t.Fatal(err)
@@ -36,9 +37,9 @@ func TestPostEvents_replayIsOk(t *testing.T) {
 	var customerID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO customers (name, price_plan_id)
-		VALUES ($1, '11111111-1111-1111-1111-111111111111')
+		VALUES ($1, $2)
 		RETURNING id::text
-	`, "http-"+prefix).Scan(&customerID); err != nil {
+	`, "http-"+prefix, domain.StandardPlanID).Scan(&customerID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -85,14 +86,14 @@ func TestPostEvents_replayIsOk(t *testing.T) {
 }
 
 func TestPostEvents_wrongKey(t *testing.T) {
-	store, err := postgres.Connect(context.Background(), "postgres://app:app@localhost:5432/billing?sslmode=disable")
+	store, err := postgres.Connect(context.Background(), domain.TestDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
 
 	h := (&Controller{
-		Auth:   &services.AuthService{Keys: store, Hasher: services.PepperHash{Pepper: "dev-key-pepper-change-me"}},
+		Auth:   &services.AuthService{Keys: store, Hasher: services.PepperHash{Pepper: domain.TestKeyPepper}},
 		Ingest: &services.IngestService{Store: store},
 		DB:     store,
 	}).Handler()
